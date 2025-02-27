@@ -86,7 +86,7 @@ extern "C" __declspec(dllexport) void Bootstrap() {
         return;
     }
 
-    if (!CLR->load_runtime(launcherPath + L"Launcher.runtimeconfig.json")) {
+    if (!CLR->load_runtime(launcherPath + L"Chorizite.Launcher.runtimeconfig.json")) {
         MessageBoxA(nullptr, "Failed to load .NET Core Runtime", "Failed", MB_OK);
         throw std::exception("Failed to load .NET Core Runtime");
     }
