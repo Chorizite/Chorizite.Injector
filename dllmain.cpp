@@ -12,6 +12,7 @@
 #include <shellapi.h>
 #include <sstream>
 #include "EntryPointParameter.h"
+#include "CrashHandler.h"
 
 // Global Variables
 CoreCLR* CLR = nullptr;
@@ -55,29 +56,52 @@ DWORD __fastcall InjectPayloadAndExecute(HANDLE hProcess, LPTHREAD_START_ROUTINE
 
     if (lpBuffer && dwSize) {
         allocatedMemory = VirtualAllocEx(hProcess, nullptr, dwSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        WriteProcessMemory(hProcess, allocatedMemory, lpBuffer, dwSize, nullptr);
+        if (allocatedMemory) {
+            WriteProcessMemory(hProcess, allocatedMemory, lpBuffer, dwSize, nullptr);
+        }
+        else {
+            MessageBoxA(nullptr, "Failed to Inject Payload.", "Failed", MB_OK);
+            return GetLastError();
+        }
     }
 
     remoteThread = CreateRemoteThread(hProcess, nullptr, 0, lpStartAddress, allocatedMemory, 0, nullptr);
-    WaitForSingleObject(remoteThread, INFINITE);
-    GetExitCodeThread(remoteThread, &exitCode);
+    if (remoteThread) {
+        WaitForSingleObject(remoteThread, INFINITE);
+        GetExitCodeThread(remoteThread, &exitCode);
+    }
+    else {
+        MessageBoxA(nullptr, "Failed to create remote thread.", "Failed", MB_OK);
+        return GetLastError();
+    }
 
     if (allocatedMemory) {
         VirtualFreeEx(hProcess, allocatedMemory, 0, MEM_RELEASE);
     }
 
-    CloseHandle(remoteThread);
+    if (remoteThread) {
+        CloseHandle(remoteThread);
+    }
+
     return exitCode;
 }
 
 // Convert wide string to C-style string
 LPSTR ToLPCSTR(LPWSTR wstr) {
     std::wstring ws(wstr);
-    return (LPSTR)(ws.c_str());
+    std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> converter;
+    std::string str = converter.to_bytes(ws);
+    return _strdup(str.c_str());
+}
+
+extern "C" __declspec(dllexport) void InitNativeCrashHandler() {
+    CrashHandler::getInstance().initialize(launcherPath);
 }
 
 // Exported function to bootstrap the CoreCLR runtime and load the target .NET assembly
 extern "C" __declspec(dllexport) void Bootstrap() {
+    CrashHandler::getInstance().initialize(launcherPath);
+
     int success = 0;
     CLR = new CoreCLR(&success);
 
@@ -122,6 +146,12 @@ extern "C" __declspec(dllexport) DWORD LaunchInjected(wchar_t* source, LPCWSTR l
     }
 
     HMODULE kernelModule = GetModuleHandleW(L"kernel32.dll");
+
+    if (!kernelModule) {
+		MessageBoxW(nullptr, L"Failed", L"Failed to load kernel32.dll", MB_OK);
+		return 0;
+	}
+
     auto loadLibraryW = reinterpret_cast<HMODULE(__stdcall*)(LPCWSTR)>(GetProcAddress(kernelModule, "LoadLibraryW"));
 
     for (int i = 0; i < numParams; i++) {
@@ -131,6 +161,11 @@ extern "C" __declspec(dllexport) DWORD LaunchInjected(wchar_t* source, LPCWSTR l
 
         char procName[200] = { 0 };
         sprintf_s(procName, "%S", entryPointParameters[i].entry_point);
+
+        if (!loadedLibrary) {
+			MessageBoxW(nullptr, L"Failed", L"Failed to load library", MB_OK);
+			return 0;
+		}
 
         LPVOID procAddress = GetProcAddress(loadedLibrary, procName);
         InjectPayloadAndExecute(processInfo.hProcess, (LPTHREAD_START_ROUTINE)procAddress, nullptr, 0);
